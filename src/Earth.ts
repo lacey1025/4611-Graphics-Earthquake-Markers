@@ -68,7 +68,37 @@ export class Earth extends gfx.Node3
         const indices: number[] = [];
         const texCoords: number[] = [];
 
+        const xinc = 360 / (meshResolution - 1);
+        const yinc = 180 / (meshResolution - 1);
+        
+        for (let i = 0; i < meshResolution; i++) {
+            const latitude = -90 + (i * yinc);
+            for (let j = 0; j < meshResolution; j++) {
+                const longitude = -180 + (j * xinc);
+                const vertex = this.convertLatLongToPlane(latitude, longitude);
+                mapVertices.push(vertex);
+                mapNormals.push(new gfx.Vector3(0, 0, 1)); 
+                texCoords.push(j / (meshResolution - 1));
+                texCoords.push(1 - (i / (meshResolution - 1)));
+            }
+        }
 
+        for (let i=0; i<meshResolution - 1; i++) {
+            for (let j=0; j<meshResolution - 1; j++) {
+                const topLeft = ((i + 1) * meshResolution) + j;
+                const topRight = ((i + 1) * meshResolution) + j + 1;
+                const bottomLeft = (i * meshResolution) + j;
+                const bottomRight = (i * meshResolution) + j + 1;
+
+                indices.push(topLeft);
+                indices.push(bottomLeft);
+                indices.push(topRight);
+
+                indices.push(bottomLeft);
+                indices.push(bottomRight);
+                indices.push(topRight);
+            }
+        }
        
 
 
@@ -92,7 +122,16 @@ export class Earth extends gfx.Node3
         const globeVertices: gfx.Vector3[] = [];
         const globeNormals: gfx.Vector3[] = [];
 
-
+        for (let i = 0; i < meshResolution; i++) {
+            const latitude = -90 + (i * yinc);
+            for (let j = 0; j < meshResolution; j++) {
+                const longitude = -180 + (j * xinc);
+                const vertex = this.convertLatLongToSphere(latitude, longitude);
+                globeVertices.push(vertex);
+                const vertexNormal = gfx.Vector3.normalize(vertex);
+                globeNormals.push(vertexNormal);
+            }
+        }
 
 
 
@@ -116,13 +155,18 @@ export class Earth extends gfx.Node3
         // this.earthMesh.morphAlpha should be set to 0 when in flat map mode and 1 when in 
         // globe mode.  However, to get a smooth morph, you will want to adjust the value
         // gradually based on the elapsed time.
-
+        const currentAlpha = this.earthMesh.morphAlpha;
         if (this.globeMode) {
             // globe mode is active
+            if (currentAlpha < 1) {
+                this.earthMesh.morphAlpha = currentAlpha + deltaTime;
+            }
         } 
         else {
             // flat map mode is active
-
+            if (currentAlpha > 0) {
+                this.earthMesh.morphAlpha = currentAlpha - deltaTime;
+            }
         }
 
     }
@@ -135,7 +179,20 @@ export class Earth extends gfx.Node3
         // need to set the quake's positions for the map and globe and set its color based on
         // the quake's magnitude.
         const duration = 12 * 30 * 24 * 60 * 60;  // approx number of milliseconds in 1 year
-        const earthquake = new EarthquakeMarker(gfx.Vector3.ZERO, gfx.Vector3.ZERO, record, duration);
+        const planePosition = this.convertLatLongToPlane(record.latitude, record.longitude);
+        const spherePosition = this.convertLatLongToSphere(record.latitude, record.longitude);
+        
+        const red = new gfx.Vector3(1, 1, 0);
+        const yellow = new gfx.Vector3(1, 0, 0);
+        
+        const earthquake = new EarthquakeMarker(planePosition, spherePosition, record, duration);
+        
+        const lerpVector = gfx.Vector3.lerp(red, yellow, earthquake.normalizedMagnitude);
+        const lerpColor = new gfx.Color(lerpVector.x, lerpVector.y, lerpVector.z);
+        earthquake.material.setColor(lerpColor);
+
+        const scale = record.normalizedMagnitude + 0.2;
+        earthquake.scale = new gfx.Vector3(scale, scale, scale);
         this.add(earthquake);
     }
 
@@ -146,17 +203,25 @@ export class Earth extends gfx.Node3
         this.children.forEach((quake: gfx.Node3) => {
             if (quake instanceof EarthquakeMarker) {
                 const playbackLife = (quake as EarthquakeMarker).getPlaybackLife(currentTime);
-
+                if (quake.scale instanceof gfx.Vector3) {
+                    const alpha = gfx.MathUtils.clamp(playbackLife * 0.05, 0, 1);
+                    const scale = gfx.Vector3.lerp(quake.scale, gfx.Vector3.ZERO, alpha);
+                    quake.scale = scale;
+                }
                 if (playbackLife >= 1) {
                     // The earthquake has exceeded its lifespan and should be moved from the scene
                     quake.remove();
                 }
                 else {
+                    const currentAlpha = this.earthMesh.morphAlpha;
                     // Part 6: Morphing the Earthquake Positions
-
-
-
-
+                    if (this.globeMode) {
+                        const globePos = gfx.Vector3.lerp(quake.mapPosition, quake.globePosition, currentAlpha);
+                        quake.position = globePos;
+                    } else {
+                        const mapPos = gfx.Vector3.lerp(quake.mapPosition, quake.globePosition, currentAlpha);
+                        quake.position = mapPos;
+                    }
                 }
             }
         });
@@ -167,9 +232,10 @@ export class Earth extends gfx.Node3
     // in the flat map coordinate system.
     public convertLatLongToPlane(latitude: number, longitude: number): gfx.Vector3
     {
+        const x = longitude * (Math.PI / 180);
+        const y = latitude * (Math.PI / 180);
 
-
-        return gfx.Vector3.ZERO;
+        return new gfx.Vector3(x, y, 0);
     }
 
 
@@ -177,9 +243,13 @@ export class Earth extends gfx.Node3
     // in the globe coordinate system.
     public convertLatLongToSphere(latitude: number, longitude: number): gfx.Vector3
     {
+        const latRadians = latitude * (Math.PI / 180);
+        const longRadians = longitude * (Math.PI / 180);
+        const x = Math.cos(latRadians) * Math.sin(longRadians);
+        const y = Math.sin(latRadians);
+        const z = Math.cos(latRadians) * Math.cos(longRadians);
 
-
-        return gfx.Vector3.ZERO;
+        return new gfx.Vector3(x, y, z);
     }
 
 
